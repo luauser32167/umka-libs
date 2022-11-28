@@ -1,0 +1,196 @@
+import (
+  std = "std.um";
+  uu = "ufmt.um";
+)
+
+fn test00() {
+  var s: str = uu.sfmt("%", 0);
+  printf("'%s'\n", s);
+}
+
+fn test01() {
+  var s: str = uu.sfmt(""/*
+    */+ "int8 min: '%'\n"/*
+    */+ "int8 max: '%'\n"/*
+    */+ "int16 min: '%'\n"/*
+    */+ "int16 max: '%'\n"/*
+    */+ "int32 min: '%'\n"/*
+    */+ "int32 max: '%'\n"/*
+    */+ "int64 min: '%'\n"/*
+    */+ "int64 max: '%'\n"/*
+    */+ "uint8 max: '%'\n"/*
+    */+ "uint16 max: '%'\n"/*
+    */+ "uint32 max: '%'\n"/*
+    */+ "uint64 max: '%'\n"/*
+    */, int8(-128), int8(127)/*
+    */, int16(-32768), int16(32767)/*
+    */, int32(-2147483648), int32(2147483647)/*
+    */, int(-9223372036854775808), int(9223372036854775807)/*
+    */, uint8(255)/*
+    */, uint16(65535)/*
+    */, uint32(4294967295)/*
+    */, uint(18446744073709551615)/*
+  */);
+  printf("base 10:\n%s", s);
+}
+
+// fn rtlfwrite(buf: ^void, size, cnt: int, f: std.File): int; // External rtlfwrite is already resolved
+
+type FilePrinter = struct {
+  f: std.File;
+}
+fn (x: ^FilePrinter) printBuf(nbuf: int, buf: []char): bool {
+   // return nbuf == rtlfwrite(&buf[0], nbuf, sizeof(char), x.f); // External rtlfwrite is already resolved
+   var ch: [1]char;
+   for a := 0; a < nbuf; a++ {
+    ch[0] = buf[a];
+    if 1 != std.fwrite(x.f, ch) {
+      return false;
+    }
+   }
+   return true;
+}
+
+fn test02() {
+  var x: FilePrinter;
+  var fname: str = "output.txt";
+  x.f = std.fopen(fname, "wb");
+  if null != x.f {
+    printf("Note: writing to file '%s'\n", fname);
+    uu.ufmt(x, ""/*
+      */+ "FilePrinter(\"%\"):\n"/*
+      */+ "bool: %\n" /*
+      */+ "int32: %\n"/*
+      */+ "int64: %\n"/*
+      */+ "str: '%'\n"/*
+      */+ "f32: %\n"/*
+      */+ "f64: %\n"/*
+      */+ "char: '%'\n"/*
+      */, fname/*
+      */, true/*
+      */, int32(-2147483648)/*
+      */, (1 << 63)/*
+      */, "Umka"/*
+      */, real32(3.14)/*
+      */, 6.28/*
+      */, 'A'/*
+    */);
+  }
+  std.fclose(x.f);
+}
+
+fn test03() {
+  var s: str = uu.sfmt(""/*
+    */+ "'%'\n"/*
+    */+ "'%'\n"/*
+    */+ "'%+'\n"/*
+    */+ "'%+'\n"/*
+    */, 1234, -1234/*
+    */, 1234, -1234/*
+  */);
+  printf("signed integers:\n%s", s);
+}
+
+fn test04() {
+  var s: str = uu.sfmt(""/*
+    */+ "'%X'\n"/*
+    */+ "'%x'\n"/*
+    */+ "'%8X'\n"/*
+    */+ "'%-8X'\n"/*
+    */+ "'%08X'\n"/*
+    */+ "'%X'\n"/*
+    */, 0xAABBCCDD/*
+    */, 0xAABBCCDD/*
+    */, 0x1234/*
+    */, 0x1234/*
+    */, 0x1234/*
+    */, ~0/*
+  */);
+  printf("base 16:\n%s", s);
+}
+
+fn test05() {
+  var s: str = uu.sfmt(""/*
+    */+ "0b'%b'\n"/*
+    */+ "0o'%o'\n"/*
+    */+ "0x'%x'\n"/*
+    */, 10/*
+    */, 69/*
+    */, 105/*
+  */);
+  printf("base 2, 8, 16:\n%s", s);
+}
+
+fn test06() {
+  var s: str = uu.sfmt(""/*
+    */+ "'%5'\n"/*
+    */+ "'%-4'\n"/*
+    */+ "'%-3X'\n"/*
+    */, true/*
+    */, "foo"/*
+   */, 0x7F/*
+  */);
+  printf("left/right justify:\n%s", s);
+}
+
+fn wrapper(fmt: str, args: ..any) {
+  var s: str = uu.sfmt(fmt, args);
+  s = uu.sfmt("wrapped: (%)", s);
+  printf("%s", s);
+}
+
+fn test07() {
+  wrapper("'%o', '%X'", 69, 105);
+}
+
+fn test08() {
+  var s: str = "X";
+  for a := 0; a < /*2^*/10; a++ {
+    s += s;
+  }
+  var ss: str = uu.sfmt("'%'\n", s);
+  printf("long string:\n%s", ss);
+}
+
+fn test09() {
+  var s: str = uu.sfmt("'%10.*'\n", 5, "0123456789");
+  printf("minimum width and precision:\n%s", s);
+}
+
+fn test10() {
+  var s: str = uu.sfmt(""/*
+    */+ "'%1.0'\n"/*
+    */+ "'%1.1'\n"/*
+    */+ "'%1.2'\n"/*
+    */+ "'%1.3'\n"/*
+    */+ "'%1.4'\n"/*
+    */+ "'%1.5'\n"/*
+    */+ "'%1.6'\n"/*
+    */+ "'%1.7'\n"/*
+    */+ "'%1.16'\n"/*
+    */, real32(0.123456)/*
+    */, 0.123456/*
+    */, 0.123456/*
+    */, 0.123456/*
+    */, 0.123456/*
+    */, 0.123456/*
+    */, 0.123456/*
+    */, 0.123456/*
+    */, 0.123456/*
+  */);
+  printf("floats:\n%s", s);
+}
+
+fn main() {
+  // test00();
+  // test01();
+  // test02();
+  // test03();
+  // test04();
+  // test05();
+  // test06();
+  // test07();
+  // test08();
+  // test09();
+  test10();
+}

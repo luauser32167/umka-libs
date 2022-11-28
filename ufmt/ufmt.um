@@ -1,0 +1,537 @@
+// callback function with context for 'ufmt'
+type UfmtCallback* = interface {
+  // returning 'false' signals the 'ufmt' function to stop with the formatting
+  printBuf(nbuf: int, buf: []char): bool;
+}
+
+// We want to minimize the calls to the above callback function because it might be doing system calls or allocations.
+// We do this by storing characters in a buffer of this size.
+const kUfmtBufSize = 512;
+
+// we can't use rtlmemcpy because it is already resolved in "std.um": "External rtlmemcpy is already resolved"
+// fn rtlmemcpy(dst, src: ^void, n: int);
+
+fn minInt(a, b: int): int {
+  if b < a { return b; }
+  return a;
+}
+
+type UfmtBuf = struct {
+  p: int;
+  buf: [/*kUfmtBufSize*/]char;
+  cb: UfmtCallback;
+}
+
+fn (ub: ^UfmtBuf) flush(p: ^int): bool {
+  if 0 != p^ {
+    if !ub.cb.printBuf(p^, ub.buf) {
+      return false;
+    }
+    p^ = 0;
+  }
+  return true;
+}
+
+fn (ub: ^UfmtBuf) writeSlice(s: []char, ofs, len: int): bool {
+  var p: int = ub.p;
+  var buf: []char = ub.buf;
+  for 0 < len; len-- {
+    if p == kUfmtBufSize {
+      if !ub.flush(&p) {
+        return false;
+      }
+    }
+    buf[p] = s[ofs];
+    p++;
+    ofs++;
+  }
+  ub.p = p;
+  return true;
+/*
+  // use rtlmemcpy
+  for 0 < len {
+    if ub.p == kUfmtBufSize {
+      if !ub.flush(&ub.p) {
+        return false;
+      }
+    }
+    var n: int = minInt(len, kUfmtBufSize - ub.p);
+    rtlmemcpy(&ub.buf[ub.p], &s[ofs], n);
+    ub.p += n;
+    ofs += n;
+    len -= n;
+  }
+  return true;
+*/
+}
+
+fn (ub: ^UfmtBuf) writeStr(s: str, ofs, len: int): bool {
+  // we cannot take the address of a string, so we cannot use 'rtlmemcpy'
+  if 255 < len {
+    // indexing into a string is slow (https://github.com/vtereshkov/umka-lang/issues/241),
+    // avoid it for "long" strings
+    var s1: []char = []char(s);
+    return ub.writeSlice(s1, ofs, len);
+  }
+  var p: int = ub.p;
+  var buf: []char = ub.buf;
+  for 0 < len; len-- {
+    if p == kUfmtBufSize {
+      if !ub.flush(&p) {
+        return false;
+      }
+    }
+    buf[p] = s[ofs];
+    p++;
+    ofs++;
+  }
+  ub.p = p;
+  return true;
+}
+
+fn (ub: ^UfmtBuf) writeCharN(c: char, n: int): bool {
+  // we don't have a 'rtlmemset' function
+  var p: int = ub.p;
+  var buf: []char = ub.buf;
+  for 0 < n; n-- {
+    if p == kUfmtBufSize {
+      if !ub.flush(&p) {
+        return false;
+      }
+    }
+    buf[p] = c;
+    p++;
+  }
+  ub.p = p;
+  return true;
+}
+
+fn bufReverse(buf: []char, b, e: int) {
+  for b < e {
+    e--;
+    var tmp: char = buf[b];
+    buf[b] = buf[e];
+    buf[e] = tmp;
+    b++;
+  }
+}
+
+fn bufFormatUint64(buf: []char, ofs: int, x: uint): int {
+  var l: int = 0;
+  for true {
+    var d: uint = x % 10;
+    x /= 10;
+    buf[ofs+l] = char(0x30 + d);
+    l++;
+    if 0 == x { break; }
+  }
+  bufReverse(buf, ofs, ofs+l);
+  return l;
+}
+
+fn bufFormatUint64Signed(buf: []char, x: uint, signFlag: bool): int {
+  var ofs: int = 0;
+  if signFlag {
+    buf[0] = '+';
+    ofs = 1;
+  }
+  return ofs + bufFormatUint64(buf, ofs, x);
+}
+
+fn bufFormatInt64(buf: []char, x: int, signFlag: bool): int {
+  var ofs: int = 0;
+  if x < 0 {
+    buf[0] = '-';
+    ofs = 1;
+    x = -x;
+  } else if signFlag {
+    buf[0] = '+';
+    ofs = 1;
+  }
+  return ofs + bufFormatUint64(buf, ofs, x);
+}
+
+fn bufFormatHex(buf: []char, upper: bool, x: uint): int {
+  var lc: int = int(!upper); // 0 or 1
+  var p: int = 0;
+  for true {
+    var d: int = x & 0xF;
+    x >>= 4;
+    // if d < 10 {
+    //   buf[p] = char(0x30 + d); // '0' .. '9'
+    // } else if upper {
+    //   buf[p] = char(0x37 + d); // 'A' .. 'F'
+    // } else {
+    //   buf[p] = char(0x57 + d); // 'a' .. 'f'
+    // }
+    //
+    // if d < 10 {
+    //   buf[p] = char(0x30 + d);
+    // } else {
+    //   buf[p] = char(0x37 + (lc<<5) + d);
+    // }
+    //
+    var c: int = int(10 <= d);
+    buf[p] = char(0x30+0x7*c + (lc<<5)*c + d);
+    p++;
+    if 0 == x { break; }
+  }
+  bufReverse(buf, 0, p);
+  return p;
+}
+
+fn bufFormatBinary(buf: []char, x: uint): int {
+  var p: int = 0;
+  for true {
+    buf[p] = char(0x30 + (x & 0x1));
+    x >>= 1;
+    p++;
+    if 0 == x { break; }
+  }
+  bufReverse(buf, 0, p);
+  return p;
+}
+
+fn bufFormatOctal(buf: []char, x: uint): int {
+  var p: int = 0;
+  for true {
+    buf[p] = char(0x30 + (x & 7));
+    x >>= 3;
+    p++;
+    if 0 == x { break; }
+  }
+  bufReverse(buf, 0, p);
+  return p;
+}
+
+fn getIntArg(x: any): (int, bool) {
+  var y: uint = 0;
+  var isInt: bool = true;
+  for true {
+    if pv := ^int(x); pv != null { y = uint(pv^); break; }
+    if pv := ^int32(x); pv != null { y = uint(pv^); break; }
+    if pv := ^uint(x); pv != null { y = pv^; break; }
+    if pv := ^uint32(x); pv != null { y = uint(pv^); break; }
+    if pv := ^int16(x); pv != null { y = uint(pv^); break; }
+    if pv := ^uint16(x); pv != null { y = uint(pv^); break; }
+    if pv := ^int8(x); pv != null { y = uint(pv^); break; }
+    if pv := ^uint8(x); pv != null { y = uint(pv^); break; }
+    isInt = false;
+    break;
+  }
+  return y, isInt;
+}
+
+fn isDigitChar(c: char): bool {
+  return '0' <= c && c <= '9';
+}
+
+fn parseInt(nfmt: int, fmt: str, p: int, outV: ^int): int {
+  var v: int = 0;
+  for p != nfmt && isDigitChar(fmt[p]) {
+    v = 10*v + (int(fmt[p]) - 0x30);
+    p++;
+  }
+  outV^ = v;
+  return p;
+}
+
+fn ufmt*(cb: UfmtCallback, fmt: str, args: ..any) {
+  var nfmt: int = len(fmt);
+  var nargs: int = len(args);
+  var argIdx: int = 0;
+  var p: int = 0;
+  var q: int = 0;
+  var ub: UfmtBuf = UfmtBuf{
+    p: 0,
+    buf: make([]char, kUfmtBufSize),
+    cb: cb };
+  var buf: []char = make([]char, 64); // big enough to hold uint64 max in binary
+
+  for true {
+    if p == nfmt {
+      if ub.writeStr(fmt, q, p - q) {
+        ub.flush(&ub.p);
+      }
+      break;
+    }
+
+    if '%' != fmt[p] {
+      p++;
+      continue;
+    } else if p + 1 != nfmt && '%' == fmt[p + 1] {
+      if !ub.writeStr(fmt, q, p - q) { break; }
+      p += 2;
+      q = p;
+      if !ub.writeCharN('%', 1) { break; }
+      continue; // %% (escaped %)
+    }
+
+    if !ub.writeStr(fmt, q, p - q) { break; }
+
+    // @Todo: language level support for asserts?
+    if '%' != fmt[p] { error("assert: ''%' != fmt[p]' failed"); }
+    p++;
+
+    if argIdx == nargs {
+      error("error: ufmt: too few arguments");
+    }
+
+    var padChar: char = ' ';
+    var signFlag: bool = false;
+    var rightJustifyFlag: bool = false;
+
+    // parse flags
+    for p != nfmt; p++ {
+      if '0' == fmt[p] {
+        if '0' == padChar { break; }
+        padChar = '0';
+        continue;
+      }
+      if '-' == fmt[p] {
+        if rightJustifyFlag { break; }
+        rightJustifyFlag = true;
+        continue;
+      }
+      if '+' == fmt[p] {
+        if signFlag { break; }
+        signFlag = true;
+        continue;
+      }
+      break;
+    }
+    if rightJustifyFlag {
+      padChar = ' ';
+    }
+
+    var minWidth: int = 0;
+    var precision: int = -1;
+    p = parseInt(nfmt, fmt, p, &minWidth);
+    if p != nfmt && '.' == fmt[p] {
+      if p + 1 == nfmt {
+        error("error: ufmt: missing precision");
+      }
+      p++;
+      if isDigitChar(fmt[p]) {
+        p = parseInt(nfmt, fmt, p, &precision);
+      } else if '*' == fmt[p] {
+        p++;
+        var arg: any = args[argIdx];
+        argIdx++;
+        if argIdx == nargs {
+          error("error: ufmt: too few arguments");
+        }
+        var isInt: bool;
+        precision, isInt = getIntArg(arg);
+        if !isInt {
+          error("error: the argument for precision '*' must be an integer");
+        }
+        if precision < -1 {
+          precision = -1;
+        }
+      } else {
+        error("error: ufmt: precision must be an integer or '*'");
+      }
+    }
+    q = p;
+
+    var arg: any = args[argIdx];
+    argIdx++;
+
+    {
+      var l: int = 0;
+      var ch: char = '\0';
+      if p != nfmt {
+        ch = char(32 | int(fmt[p]));
+      }
+      if 'x' == ch || 'b' == ch || 'o' == ch {
+        var upper: bool = 'X' == fmt[p];
+        p++;
+        q = p;
+        var v: uint;
+        var isInt: bool;
+        v, isInt = getIntArg(arg);
+        if !isInt {
+          error("error: the argument for the format specifiers 'X', 'x', 'b' and 'o' must be an integer");
+        }
+        if 'x' == ch {
+          l = bufFormatHex(buf, upper, v);
+        } else if 'b' == ch {
+          l = bufFormatBinary(buf, v);
+        } else if 'o' == ch {
+          l = bufFormatOctal(buf, v);
+        }
+      } else if pv := ^int(arg); pv != null {
+        l = bufFormatInt64(buf, pv^, signFlag);
+
+      } else if pv := ^int32(arg); pv != null {
+        l = bufFormatInt64(buf, int(pv^), signFlag);
+
+      } else if pv := ^uint(arg); pv != null {
+        l = bufFormatUint64Signed(buf, pv^, signFlag);
+
+      } else if pv := ^uint32(arg); pv != null {
+        l = bufFormatUint64Signed(buf, uint(pv^), signFlag);
+
+      } else if pv := ^int16(arg); pv != null {
+        l = bufFormatInt64(buf, int(pv^), signFlag);
+
+      } else if pv := ^uint16(arg); pv != null {
+        l = bufFormatUint64Signed(buf, uint(pv^), signFlag);
+
+      } else if pv := ^int8(arg); pv != null {
+        l = bufFormatInt64(buf, int(pv^), signFlag);
+
+      } else if pv := ^uint8(arg); pv != null {
+        l = bufFormatUint64Signed(buf, uint(pv^), signFlag);
+
+      } else if pv := ^char(arg); pv != null {
+        padChar = ' ';
+        l = 1;
+        buf[0] = pv^;
+      } else if pv := ^bool(arg); pv != null {
+        padChar = ' ';
+        if pv^ {
+          l = 4;
+          buf[0] = 't';
+          buf[1] = 'r';
+          buf[2] = 'u';
+          buf[3] = 'e';
+        } else {
+          l = 5;
+          buf[0] = 'f';
+          buf[1] = 'a';
+          buf[2] = 'l';
+          buf[3] = 's';
+          buf[4] = 'e';
+        }
+      }
+      if 0 != l {
+        if !rightJustifyFlag {
+          if !ub.writeCharN(padChar, minWidth - l) { break; }
+        }
+        if !ub.writeSlice(buf, 0, l) { break; }
+        if rightJustifyFlag {
+          if !ub.writeCharN(padChar, minWidth - l) { break; }
+        }
+        continue;
+      }
+    }
+
+    if pv := ^str(arg); pv != null {
+      var l: int = len(pv^);
+      if -1 != precision {
+        l = minInt(l, precision);
+      }
+      if !rightJustifyFlag {
+        if !ub.writeCharN(' ', minWidth - l) { break; }
+      }
+      if !ub.writeStr(pv^, 0, l) { break; }
+      if rightJustifyFlag {
+        if !ub.writeCharN(' ', minWidth - l) { break; }
+      }
+      continue;
+
+    } else if pv := ^[]char(arg); pv != null {
+      var l: int = len(pv^);
+      if -1 != precision {
+        l = minInt(l, precision);
+      }
+      if !rightJustifyFlag {
+        if !ub.writeCharN(' ', minWidth - l) { break; }
+      }
+      if !ub.writeSlice(pv^, 0, l) { break; }
+      if rightJustifyFlag {
+        if !ub.writeCharN(' ', minWidth - l) { break; }
+      }
+      continue;
+    }
+
+    if null != ^real32(arg) || null != ^real(arg) {
+      // @Hack: we need an extension function (not 'sprintf') that can format floats
+      var ffmt: str = "%f";
+      if 0 == minWidth || 1 == minWidth {
+        switch precision {
+        case 0: ffmt = "%1.0f";
+        case 1: ffmt = "%1.1f";
+        case 2: ffmt = "%1.2f";
+        case 3: ffmt = "%1.3f";
+        case 4: ffmt = "%1.4f";
+        case 5: ffmt = "%1.5f";
+        case 6: ffmt = "%1.6f";
+        case 7: ffmt = "%1.7f";
+        case 8: ffmt = "%1.8f";
+        case 9: ffmt = "%1.9f";
+        case 10: ffmt = "%1.10f";
+        case 11: ffmt = "%1.11f";
+        case 12: ffmt = "%1.12f";
+        case 13: ffmt = "%1.13f";
+        case 14: ffmt = "%1.14f";
+        case 15: ffmt = "%1.15f";
+        case 16: ffmt = "%1.16f";
+        }
+      }
+
+      var ss: str = "";
+      if pv := ^real32(arg); pv != null {
+        ss = sprintf(ffmt, pv^);
+      } else if pv := ^real(arg); pv != null {
+        ss = sprintf(ffmt, pv^);
+      }
+      if 0 != len(ss) {
+        var l: int = len(ss);
+        if !rightJustifyFlag {
+          if !ub.writeCharN(' ', minWidth - l) { break; }
+        }
+        if !ub.writeStr(ss, 0, l) { break; }
+        if rightJustifyFlag {
+          if !ub.writeCharN(' ', minWidth - l) { break; }
+        }
+        continue;
+      }
+    }
+
+    // There currently isn't a way to test if an 'any' value is holding a specific interface.
+    // type SprintfToString = interface {
+    //   toString(): str;
+    // }
+    // type Foo = struct {}
+    // fn (x: ^Foo) toString(): str {
+    //   return "Foo{}";
+    // }
+    error("error: ufmt: unimplemented type");
+  }
+
+  if argIdx != nargs {
+    error("error: ufmt: too many arguments");
+  }
+}
+
+type FmtLenCalc = struct {
+  len: int;
+}
+fn (x: ^FmtLenCalc) printBuf(nbuf: int, buf: []char): bool {
+  x.len += nbuf;
+  return true;
+}
+fn calcFmtLen*(fmt: str, args: ..any): int {
+  var x: FmtLenCalc;
+  // x.len = 0;
+  ufmt(&x, fmt, args);
+  return x.len;
+}
+
+type StrPrinter = struct {
+  buf: []char;
+}
+fn (x: ^StrPrinter) printBuf(nbuf: int, buf: []char): bool {
+  for a := 0; a < nbuf; a++ {
+    x.buf = append(x.buf, buf[a]);
+  }
+  return true;
+}
+fn sfmt*(fmt: str, args: ..any): str {
+  var x: StrPrinter;
+  ufmt(&x, fmt, args);
+  return str(x.buf);
+}
