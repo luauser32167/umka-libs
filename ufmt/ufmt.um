@@ -361,17 +361,45 @@ fn ufmt*(cb: UfmtCallback, fmt: str, args: ..any) {
         } else if 'o' == ch {
           l = bufFormatOctal(buf, v);
         }
-      } else if pv := ^int(arg); pv != null {
-        l = bufFormatInt64(buf, pv^, signFlag);
+      } else if pv := ^str(arg); pv != null {
+        l = len(pv^);
+        if -1 != precision {
+          l = minInt(l, precision);
+        }
+        if !rightJustifyFlag {
+          if !ub.writeCharN(' ', minWidth - l) { break; }
+        }
+        if !ub.writeStr(pv^, 0, l) { break; }
+        if rightJustifyFlag {
+          if !ub.writeCharN(' ', minWidth - l) { break; }
+        }
+        continue;
+
+      } else if pv := ^[]char(arg); pv != null {
+        l = len(pv^);
+        if -1 != precision {
+          l = minInt(l, precision);
+        }
+        if !rightJustifyFlag {
+          if !ub.writeCharN(' ', minWidth - l) { break; }
+        }
+        if !ub.writeSlice(pv^, 0, l) { break; }
+        if rightJustifyFlag {
+          if !ub.writeCharN(' ', minWidth - l) { break; }
+        }
+        continue;
 
       } else if pv := ^int32(arg); pv != null {
         l = bufFormatInt64(buf, int(pv^), signFlag);
 
-      } else if pv := ^uint(arg); pv != null {
-        l = bufFormatUint64Signed(buf, pv^, signFlag);
-
       } else if pv := ^uint32(arg); pv != null {
         l = bufFormatUint64Signed(buf, uint(pv^), signFlag);
+
+      } else if pv := ^int(arg); pv != null {
+        l = bufFormatInt64(buf, pv^, signFlag);
+
+      } else if pv := ^uint(arg); pv != null {
+        l = bufFormatUint64Signed(buf, pv^, signFlag);
 
       } else if pv := ^int16(arg); pv != null {
         l = bufFormatInt64(buf, int(pv^), signFlag);
@@ -379,11 +407,11 @@ fn ufmt*(cb: UfmtCallback, fmt: str, args: ..any) {
       } else if pv := ^uint16(arg); pv != null {
         l = bufFormatUint64Signed(buf, uint(pv^), signFlag);
 
-      } else if pv := ^int8(arg); pv != null {
-        l = bufFormatInt64(buf, int(pv^), signFlag);
-
       } else if pv := ^uint8(arg); pv != null {
         l = bufFormatUint64Signed(buf, uint(pv^), signFlag);
+
+      } else if pv := ^int8(arg); pv != null {
+        l = bufFormatInt64(buf, int(pv^), signFlag);
 
       } else if pv := ^char(arg); pv != null {
         padChar = ' ';
@@ -406,6 +434,7 @@ fn ufmt*(cb: UfmtCallback, fmt: str, args: ..any) {
           buf[4] = 'e';
         }
       }
+
       if 0 != l {
         if !rightJustifyFlag {
           if !ub.writeCharN(padChar, minWidth - l) { break; }
@@ -416,35 +445,6 @@ fn ufmt*(cb: UfmtCallback, fmt: str, args: ..any) {
         }
         continue;
       }
-    }
-
-    if pv := ^str(arg); pv != null {
-      var l: int = len(pv^);
-      if -1 != precision {
-        l = minInt(l, precision);
-      }
-      if !rightJustifyFlag {
-        if !ub.writeCharN(' ', minWidth - l) { break; }
-      }
-      if !ub.writeStr(pv^, 0, l) { break; }
-      if rightJustifyFlag {
-        if !ub.writeCharN(' ', minWidth - l) { break; }
-      }
-      continue;
-
-    } else if pv := ^[]char(arg); pv != null {
-      var l: int = len(pv^);
-      if -1 != precision {
-        l = minInt(l, precision);
-      }
-      if !rightJustifyFlag {
-        if !ub.writeCharN(' ', minWidth - l) { break; }
-      }
-      if !ub.writeSlice(pv^, 0, l) { break; }
-      if rightJustifyFlag {
-        if !ub.writeCharN(' ', minWidth - l) { break; }
-      }
-      continue;
     }
 
     if null != ^real32(arg) || null != ^real(arg) {
