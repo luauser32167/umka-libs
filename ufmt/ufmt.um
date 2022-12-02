@@ -89,6 +89,25 @@ fn (ub: ^UfmtBuf) writeStr(s: str, ofs, len: int): bool {
   return true;
 }
 
+fn (ub: ^UfmtBuf) writeStrFast(s: str, len: int): bool {
+  var p: int = ub.p;
+  var buf: []char = ub.buf;
+  for idx, c in s {
+    if idx == len {
+      break;
+    }
+    if p == kUfmtBufSize {
+      if !ub.flush(&p) {
+        return false;
+      }
+    }
+    buf[p] = c;
+    p++;
+  }
+  ub.p = p;
+  return true;
+}
+
 fn (ub: ^UfmtBuf) writeCharN(c: char, n: int): bool {
   // we don't have a 'rtlmemset' function
   var p: int = ub.p;
@@ -369,7 +388,7 @@ fn ufmt*(cb: UfmtCallback, fmt: str, args: ..any) {
         if !rightJustifyFlag {
           if !ub.writeCharN(' ', minWidth - l) { break; }
         }
-        if !ub.writeStr(pv^, 0, l) { break; }
+        if !ub.writeStrFast(pv^, l) { break; }
         if rightJustifyFlag {
           if !ub.writeCharN(' ', minWidth - l) { break; }
         }
@@ -483,7 +502,7 @@ fn ufmt*(cb: UfmtCallback, fmt: str, args: ..any) {
         if !rightJustifyFlag {
           if !ub.writeCharN(' ', minWidth - l) { break; }
         }
-        if !ub.writeStr(ss, 0, l) { break; }
+        if !ub.writeStrFast(ss, l) { break; }
         if rightJustifyFlag {
           if !ub.writeCharN(' ', minWidth - l) { break; }
         }
